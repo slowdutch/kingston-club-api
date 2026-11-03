@@ -7,6 +7,9 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 import asyncio
 import copy
+import hashlib
+import hmac
+import json
 import os
 import requests
 from datetime import datetime, timedelta, timezone
@@ -217,6 +220,53 @@ def send_message():
 STRIPE_API_KEY = os.getenv('STRIPE_API_KEY')
 STRIPE_PAYMENT_LINK_ID = os.getenv('STRIPE_PAYMENT_LINK_ID', 'plink_1UXVYtR4Glk7COcQN0kzCcC5')
 ADMIN_KEY = os.getenv('ADMIN_KEY')
+
+# Supabase service access (webhook marks kit orders paid)
+SUPABASE_URL = os.getenv('SUPABASE_URL', 'https://bprieehoiiwliiencitr.supabase.co')
+SUPABASE_SERVICE_KEY = os.getenv('SUPABASE_SERVICE_KEY')
+
+
+@app.route('/api/stripe/webhook', methods=['POST'])
+def stripe_webhook():
+    """checkout.session.completed → mark the latest pending kit order for that email as paid."""
+    secret = os.getenv('STRIPE_WEBHOOK_SECRET')
+    if not secret:
+        return jsonify({'error': 'STRIPE_WEBHOOK_SECRET not set'}), 500
+    sig = request.headers.get('Stripe-Signature', '')
+    try:
+        parts = dict(p.split('=', 1) for p in sig.split(',') if '=' in p)
+        t, v1 = parts['t'], parts['v1']
+    except (KeyError, ValueError):
+        return jsonify({'error': 'bad signature header'}), 400
+    payload = request.get_data()
+    expected = hmac.new(secret.encode(), f'{t}.'.encode() + payload, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, v1):
+        return jsonify({'error': 'signature mismatch'}), 400
+
+    event = json.loads(payload)
+    if event.get('type') != 'checkout.session.completed':
+        return jsonify({'received': True})
+    s = event.get('data', {}).get('object', {})
+    if s.get('payment_link') != STRIPE_PAYMENT_LINK_ID or not SUPABASE_SERVICE_KEY:
+        return jsonify({'received': True})
+
+    email = ((s.get('customer_details') or {}).get('email')) or s.get('customer_email') or ''
+    if not email:
+        return jsonify({'received': True, 'note': 'no email on session'}), 200
+
+    hdrs = {'apikey': SUPABASE_SERVICE_KEY, 'Authorization': f'Bearer {SUPABASE_SERVICE_KEY}'}
+    q = requests.get(f'{SUPABASE_URL}/rest/v1/kit_orders',
+                     params={'parent_email': f'eq.{email}', 'status': 'eq.pending_payment',
+                             'select': 'id', 'order': 'created_at.desc', 'limit': 1},
+                     headers=hdrs, timeout=15)
+    rows = q.json() if q.status_code == 200 else []
+    if not rows:
+        return jsonify({'received': True, 'note': 'no pending order matched'}), 200
+    requests.patch(f'{SUPABASE_URL}/rest/v1/kit_orders',
+                   params={'id': f'eq.{rows[0]["id"]}'},
+                   headers={**hdrs, 'Content-Type': 'application/json', 'Prefer': 'return=minimal'},
+                   data=json.dumps({'status': 'paid'}), timeout=15)
+    return jsonify({'received': True, 'paid_order': rows[0]['id']}), 200
 
 
 @app.route('/api/stripe/payments', methods=['GET'])
