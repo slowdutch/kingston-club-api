@@ -190,17 +190,20 @@ def create_match():
     time_str = data.get('time')
     opponent = data.get('opponent')
     home = data.get('home', True)
+    tbd_time = not time_str
 
     async def create():
         s = spond.Spond(username=SPOND_USERNAME, password=SPOND_PASSWORD)
         try:
-            start = datetime.fromisoformat(f"{date_str}T{time_str}:00").replace(tzinfo=LONDON)
+            # Spond requires a start time; without one we park matches at
+            # noon and label them clearly until the league confirms.
+            start = datetime.fromisoformat(f"{date_str}T{time_str or '12:00'}:00").replace(tzinfo=LONDON)
             result = await create_event(
-                s, heading=f"U11 Match vs {opponent}",
+                s, heading=f"U11 Match vs {opponent}{' (KO TBC)' if tbd_time else ''}",
                 start=start, end=start + timedelta(hours=1, minutes=30),
                 location_name="Weir Archer Athletics & Fitness Centre" if home else "Away Venue (TBC)",
                 location_address="Kingston Road, Tolworth, Surbiton, KT5 9QB" if home else "",
-                description=f"{'HOME' if home else 'AWAY'} match. Full match kit and shin pads required. Arrive 30 minutes before kick-off.",
+                description=f"{'HOME' if home else 'AWAY'} match. Kick-off time to be confirmed by the league. Full match kit and shin pads required. Meet 30 minutes before kick-off.",
             )
             return result
         finally:
@@ -225,6 +228,7 @@ def update_event_route():
     if not uid:
         return jsonify({'error': 'uid is required'}), 400
     kind = data.get('kind', 'match')
+    tbd_time = kind == 'match' and not data.get('time')
 
     async def update():
         s = spond.Spond(username=SPOND_USERNAME, password=SPOND_PASSWORD)
@@ -232,7 +236,12 @@ def update_event_route():
             event = await s.get_event(uid)
             if not event:
                 raise ValueError('Event not found')
-            start = datetime.fromisoformat(f"{data['date']}T{data.get('time', '15:00' if kind == 'training' else '10:30')}:00").replace(tzinfo=LONDON)
+            if kind == 'training':
+                start = datetime.fromisoformat(f"{data['date']}T{data.get('time', '15:00')}:00").replace(tzinfo=LONDON)
+            else:
+                # Spond requires a start time; without one we park matches at
+                # noon and label them clearly until the league confirms.
+                start = datetime.fromisoformat(f"{data['date']}T{data.get('time', '12:00')}:00").replace(tzinfo=LONDON)
             if kind == 'training':
                 end = start + timedelta(hours=1)
                 heading = 'U11 Training Session'
@@ -240,12 +249,12 @@ def update_event_route():
                 description = "Bring: Training kit, water bottle, any medication.\nArrive 2:50pm for 3:00pm start.\nShin pads are only needed for matches."
             else:
                 end = start + timedelta(hours=1, minutes=30)
-                opponent = data.get('opponent') or (event.get('heading', '').replace('U11 Match vs ', '') or 'Opponent')
+                opponent = data.get('opponent') or (event.get('heading', '').replace('U11 Match vs ', '').replace(' (KO TBC)', '') or 'Opponent')
                 home = data.get('home', True)
-                heading = f"U11 Match vs {opponent}"
+                heading = f"U11 Match vs {opponent}{' (KO TBC)' if tbd_time else ''}"
                 location_name = "Weir Archer Athletics & Fitness Centre" if home else "Away Venue (TBC)"
                 location_address = "Kingston Road, Tolworth, Surbiton, KT5 9QB" if home else ""
-                description = f"{'HOME' if home else 'AWAY'} match. Full match kit and shin pads required. Arrive 30 minutes before kick-off."
+                description = f"{'HOME' if home else 'AWAY'} match. Kick-off time to be confirmed by the league. Full match kit and shin pads required. Meet 30 minutes before kick-off."
             updates = {
                 'heading': heading,
                 'name': heading,
