@@ -304,17 +304,18 @@ def stripe_webhook():
 
 @app.route('/api/stripe/payments', methods=['GET'])
 def stripe_payments():
-    """List recent checkout sessions for the kit payment link."""
+    """List kit checkout sessions and monthly-fee subscription invoices."""
     if ADMIN_KEY and request.headers.get('X-Admin-Key') != ADMIN_KEY:
         return jsonify({'error': 'unauthorized'}), 401
     if not STRIPE_API_KEY:
         return jsonify({'error': 'STRIPE_API_KEY not configured on server'}), 500
+    auth = {'Authorization': f'Bearer {STRIPE_API_KEY}'}
+
     try:
         r = requests.get(
             'https://api.stripe.com/v1/checkout/sessions',
             params={'payment_link': STRIPE_PAYMENT_LINK_ID, 'limit': 100},
-            headers={'Authorization': f'Bearer {STRIPE_API_KEY}'},
-            timeout=15)
+            headers=auth, timeout=15)
         r.raise_for_status()
     except requests.RequestException as e:
         return jsonify({'error': f'Stripe request failed: {e}'}), 502
@@ -326,7 +327,32 @@ def stripe_payments():
         'email': (s.get('customer_details') or {}).get('email'),
         'player': s.get('client_reference_id'),
     } for s in r.json().get('data', [])]
-    return jsonify({'payments': payments})
+
+    fees = []
+    try:
+        r = requests.get(
+            'https://api.stripe.com/v1/invoices',
+            params={'limit': 100, 'status': 'paid', 'expand[]': ['data.customer']},
+            headers=auth, timeout=15)
+        r.raise_for_status()
+        for inv in r.json().get('data', []):
+            lines = inv.get('lines', {}).get('data', [])
+            desc = (lines[0].get('description') if lines else '') or ''
+            if 'training' not in desc.lower() and 'subscription' not in (inv.get('billing_reason') or ''):
+                continue
+            cust = inv.get('customer') or {}
+            fees.append({
+                'created': inv.get('created'),
+                'status': inv.get('status'),
+                'amount': inv.get('amount_paid'),
+                'currency': inv.get('currency'),
+                'email': cust.get('email') if isinstance(cust, dict) else None,
+                'description': desc,
+            })
+    except requests.RequestException:
+        pass  # fees list is best-effort; kit payments still render
+
+    return jsonify({'payments': payments, 'fees': fees})
 
 
 if __name__ == '__main__':
