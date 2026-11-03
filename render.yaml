@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: kingston-club-api
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn api_server:app --bind 0.0.0.0:$PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: SPOND_USERNAME
+        sync: false
+      - key: SPOND_PASSWORD
+        sync: false
+      - key: SPOND_GROUP_ID
+        sync: false
+      - key: STRIPE_API_KEY
+        sync: false
+      - key: STRIPE_PAYMENT_LINK_ID
+        sync: false
+      - key: ADMIN_KEY
+        sync: false
