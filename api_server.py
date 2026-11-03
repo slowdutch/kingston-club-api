@@ -123,7 +123,32 @@ def get_events():
     try:
         events, group = run_async(fetch())
         members = _member_names(group)
-        return jsonify([_reshape_event(e, members) for e in events]), 200
+        reshaped = [_reshape_event(e, members) for e in events]
+        reshaped.sort(key=lambda e: e.get('startTimestamp') or '')
+        return jsonify(reshaped), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/spond/members', methods=['GET'])
+def get_members():
+    """Group members with display names — lets the console reconcile the
+    Spond group against the squad roster (who has joined, who hasn't)."""
+    async def fetch():
+        s = spond.Spond(username=SPOND_USERNAME, password=SPOND_PASSWORD)
+        try:
+            return await s.get_group(SPOND_GROUP_ID)
+        finally:
+            await s.clientsession.close()
+
+    try:
+        group = run_async(fetch())
+        out = []
+        for m in (group or {}).get('members', []):
+            name = ' '.join(filter(None, [m.get('firstName'), m.get('lastName')])).strip() or 'Unknown'
+            out.append({'id': m.get('id'), 'name': name})
+        out.sort(key=lambda m: m['name'])
+        return jsonify(out), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -144,7 +169,7 @@ def create_training():
                 start=start, end=start + timedelta(hours=1),
                 location_name="The Tiffin Girls' School",
                 location_address="Richmond Road, Kingston upon Thames, KT2 5PL",
-                description="Bring: Kit, shin pads, water bottle, any medication.\nArrive 2:50pm for 3:00pm start.",
+                description="Bring: Training kit, water bottle, any medication.\nArrive 2:50pm for 3:00pm start.\nShin pads are only needed for matches.",
             )
             return result
         finally:
@@ -175,7 +200,7 @@ def create_match():
                 start=start, end=start + timedelta(hours=1, minutes=30),
                 location_name="Weir Archer Athletics & Fitness Centre" if home else "Away Venue (TBC)",
                 location_address="Kingston Road, Tolworth, Surbiton, KT5 9QB" if home else "",
-                description=f"{'HOME' if home else 'AWAY'} match. Full match kit required. Arrive 30 minutes before kick-off.",
+                description=f"{'HOME' if home else 'AWAY'} match. Full match kit and shin pads required. Arrive 30 minutes before kick-off.",
             )
             return result
         finally:
@@ -184,6 +209,48 @@ def create_match():
     try:
         result = run_async(create())
         return jsonify(result), 201
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/spond/update-match', methods=['POST'])
+def update_match():
+    """Update an existing match/training event (date, time, home/away, opponent).
+
+    The league keeps moving dates, so provisional events need to be editable
+    without deleting and recreating them (which would drop replies)."""
+    data = request.json
+    uid = data.get('uid')
+    if not uid:
+        return jsonify({'error': 'uid is required'}), 400
+
+    async def update():
+        s = spond.Spond(username=SPOND_USERNAME, password=SPOND_PASSWORD)
+        try:
+            event = await s.get_event(uid)
+            if not event:
+                raise ValueError('Event not found')
+            start = datetime.fromisoformat(f"{data['date']}T{data.get('time', '10:30')}:00").replace(tzinfo=LONDON)
+            end = start + timedelta(hours=1, minutes=30)
+            opponent = data.get('opponent') or (event.get('heading', '').replace('U11 Match vs ', '') or 'Opponent')
+            home = data.get('home', True)
+            updates = {
+                'heading': f"U11 Match vs {opponent}",
+                'name': f"U11 Match vs {opponent}",
+                'startTimestamp': _utc_stamp(start),
+                'endTimestamp': _utc_stamp(end),
+                'location': {'name': "Weir Archer Athletics & Fitness Centre" if home else "Away Venue (TBC)",
+                             'address': "Kingston Road, Tolworth, Surbiton, KT5 9QB" if home else "",
+                             'feature': None, 'id': None, 'latitude': None, 'longitude': None},
+                'description': f"{'HOME' if home else 'AWAY'} match. Full match kit and shin pads required. Arrive 30 minutes before kick-off.",
+            }
+            return await s.update_event(uid, updates)
+        finally:
+            await s.clientsession.close()
+
+    try:
+        result = run_async(update())
+        return jsonify({'updated': uid, 'result': result}), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
