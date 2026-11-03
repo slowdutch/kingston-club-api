@@ -213,9 +213,10 @@ def create_match():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/spond/update-event', methods=['POST'])
 @app.route('/api/spond/update-match', methods=['POST'])
-def update_match():
-    """Update an existing match/training event (date, time, home/away, opponent).
+def update_event_route():
+    """Update an existing event (date, time, home/away, opponent, kind).
 
     The league keeps moving dates, so provisional events need to be editable
     without deleting and recreating them (which would drop replies)."""
@@ -223,6 +224,7 @@ def update_match():
     uid = data.get('uid')
     if not uid:
         return jsonify({'error': 'uid is required'}), 400
+    kind = data.get('kind', 'match')
 
     async def update():
         s = spond.Spond(username=SPOND_USERNAME, password=SPOND_PASSWORD)
@@ -230,19 +232,28 @@ def update_match():
             event = await s.get_event(uid)
             if not event:
                 raise ValueError('Event not found')
-            start = datetime.fromisoformat(f"{data['date']}T{data.get('time', '10:30')}:00").replace(tzinfo=LONDON)
-            end = start + timedelta(hours=1, minutes=30)
-            opponent = data.get('opponent') or (event.get('heading', '').replace('U11 Match vs ', '') or 'Opponent')
-            home = data.get('home', True)
+            start = datetime.fromisoformat(f"{data['date']}T{data.get('time', '15:00' if kind == 'training' else '10:30')}:00").replace(tzinfo=LONDON)
+            if kind == 'training':
+                end = start + timedelta(hours=1)
+                heading = 'U11 Training Session'
+                location_name, location_address = "The Tiffin Girls' School", "Richmond Road, Kingston upon Thames, KT2 5PL"
+                description = "Bring: Training kit, water bottle, any medication.\nArrive 2:50pm for 3:00pm start.\nShin pads are only needed for matches."
+            else:
+                end = start + timedelta(hours=1, minutes=30)
+                opponent = data.get('opponent') or (event.get('heading', '').replace('U11 Match vs ', '') or 'Opponent')
+                home = data.get('home', True)
+                heading = f"U11 Match vs {opponent}"
+                location_name = "Weir Archer Athletics & Fitness Centre" if home else "Away Venue (TBC)"
+                location_address = "Kingston Road, Tolworth, Surbiton, KT5 9QB" if home else ""
+                description = f"{'HOME' if home else 'AWAY'} match. Full match kit and shin pads required. Arrive 30 minutes before kick-off."
             updates = {
-                'heading': f"U11 Match vs {opponent}",
-                'name': f"U11 Match vs {opponent}",
+                'heading': heading,
+                'name': heading,
                 'startTimestamp': _utc_stamp(start),
                 'endTimestamp': _utc_stamp(end),
-                'location': {'name': "Weir Archer Athletics & Fitness Centre" if home else "Away Venue (TBC)",
-                             'address': "Kingston Road, Tolworth, Surbiton, KT5 9QB" if home else "",
+                'location': {'name': location_name, 'address': location_address,
                              'feature': None, 'id': None, 'latitude': None, 'longitude': None},
-                'description': f"{'HOME' if home else 'AWAY'} match. Full match kit and shin pads required. Arrive 30 minutes before kick-off.",
+                'description': description,
             }
             return await s.update_event(uid, updates)
         finally:
