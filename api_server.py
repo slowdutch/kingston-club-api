@@ -158,7 +158,7 @@ def create_training():
     """Create training session in Spond"""
     data = request.json
     date_str = data.get('date')
-    time_str = data.get('time', '15:00')
+    time_str = data.get('time', '15:30')
 
     async def create():
         s = spond.Spond(username=SPOND_USERNAME, password=SPOND_PASSWORD)
@@ -169,7 +169,7 @@ def create_training():
                 start=start, end=start + timedelta(hours=1),
                 location_name="The Tiffin Girls' School",
                 location_address="Richmond Road, Kingston upon Thames, KT2 5PL",
-                description="Bring: Training kit, water bottle, any medication.\nArrive 2:50pm for 3:00pm start.\nShin pads are only needed for matches.",
+                description="Bring: Training kit, water bottle, any medication.\nArrive 3:20pm for 3:30pm start.\nShin pads are only needed for matches.",
             )
             return result
         finally:
@@ -237,7 +237,7 @@ def update_event_route():
             if not event:
                 raise ValueError('Event not found')
             if kind == 'training':
-                start = datetime.fromisoformat(f"{data['date']}T{data.get('time', '15:00')}:00").replace(tzinfo=LONDON)
+                start = datetime.fromisoformat(f"{data['date']}T{data.get('time', '15:30')}:00").replace(tzinfo=LONDON)
             else:
                 # Spond requires a start time; without one we park matches at
                 # noon and label them clearly until the league confirms.
@@ -246,7 +246,7 @@ def update_event_route():
                 end = start + timedelta(hours=1)
                 heading = 'U11 Training Session'
                 location_name, location_address = "The Tiffin Girls' School", "Richmond Road, Kingston upon Thames, KT2 5PL"
-                description = "Bring: Training kit, water bottle, any medication.\nArrive 2:50pm for 3:00pm start.\nShin pads are only needed for matches."
+                description = "Bring: Training kit, water bottle, any medication.\nArrive 3:20pm for 3:30pm start.\nShin pads are only needed for matches."
             else:
                 end = start + timedelta(hours=1, minutes=30)
                 opponent = data.get('opponent') or (event.get('heading', '').replace('U11 Match vs ', '').replace(' (KO TBC)', '') or 'Opponent')
