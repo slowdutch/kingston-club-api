@@ -74,9 +74,39 @@ def run_async(coro):
         loop.close()
 
 
+def _member_names(group):
+    """Map member id -> display name (Spond API events only carry member IDs)."""
+    out = {}
+    for m in (group or {}).get('members', []):
+        name = ' '.join(filter(None, [m.get('firstName'), m.get('lastName')])).strip()
+        out[m.get('id')] = name or 'Unknown'
+    return out
+
+
+def _reshape_event(e, members):
+    """Frontend-friendly event: counts + participant names resolved from the group."""
+    r = e.get('responses') or {}
+
+    def plist(key):
+        return [{'id': i, 'name': members.get(i, 'Unknown')} for i in (r.get(key) or [])]
+
+    acc, dec, un = plist('acceptedIds'), plist('declinedIds'), plist('unansweredIds')
+    loc = e.get('location')
+    return {
+        'uid': e.get('id'),
+        'heading': e.get('heading'),
+        'startTimestamp': e.get('startTimestamp'),
+        'location': {'name': loc.get('name') if isinstance(loc, dict) else loc},
+        'responses': {
+            'acceptedCount': len(acc), 'declinedCount': len(dec), 'unansweredCount': len(un),
+            'acceptedParticipants': acc, 'declinedParticipants': dec, 'unansweredParticipants': un,
+        },
+    }
+
+
 @app.route('/api/spond/events', methods=['GET'])
 def get_events():
-    """Get upcoming events from Spond"""
+    """Get upcoming events from Spond, enriched with response counts and names"""
     async def fetch():
         s = spond.Spond(username=SPOND_USERNAME, password=SPOND_PASSWORD)
         try:
@@ -85,13 +115,15 @@ def get_events():
                 min_start=datetime.now(timezone.utc) - timedelta(days=1),
                 max_events=50
             )
-            return events
+            group = await s.get_group(SPOND_GROUP_ID)
+            return events, group
         finally:
             await s.clientsession.close()
 
     try:
-        events = run_async(fetch())
-        return jsonify(events), 200
+        events, group = run_async(fetch())
+        members = _member_names(group)
+        return jsonify([_reshape_event(e, members) for e in events]), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -158,18 +190,19 @@ def create_match():
 
 @app.route('/api/spond/event/<event_id>/attendance', methods=['GET'])
 def get_event_attendance(event_id):
-    """Get detailed attendance for a specific event"""
+    """Get detailed attendance for a specific event, enriched with names"""
     async def fetch():
         s = spond.Spond(username=SPOND_USERNAME, password=SPOND_PASSWORD)
         try:
             event = await s.get_event(event_id)
-            return event
+            group = await s.get_group(SPOND_GROUP_ID)
+            return event, group
         finally:
             await s.clientsession.close()
 
     try:
-        event = run_async(fetch())
-        return jsonify(event), 200
+        event, group = run_async(fetch())
+        return jsonify(_reshape_event(event, _member_names(group))), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
